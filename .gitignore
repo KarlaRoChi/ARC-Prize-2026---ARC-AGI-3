@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Submissions, recordings & logs (downloaded / generated)
+submissions/
+*.parquet
+*.jsonl
+*.log
+
+# Competition data (download with `kaggle competitions download arc-prize-2026-arc-agi-3`)
+data/
+
+# Notebooks
+.ipynb_checkpoints/
