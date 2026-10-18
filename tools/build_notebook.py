@@ -16,23 +16,21 @@ NOTEBOOK = ROOT / "kaggle_arc3_agent.ipynb"
 
 COMP = "/kaggle/input/competitions/arc-prize-2026-arc-agi-3"
 
-INTRO = """# ARC Prize 2026 — ARC-AGI-3: Graph Explorer Agent
+INTRO = """# ARC Prize 2026 — ARC-AGI-3: Graph Explorer Agent (v2)
 
-Agente para juegos interactivos de ARC-AGI-3 (CPU, sin LLM).
+Autonomous graph explorer agent for interactive ARC-AGI-3 environments (CPU, zero GPU slots).
 
-**Estrategia:** cada nivel se trata como una máquina de estados desconocida.
-- Estado = hash de la cuadrícula visible.
-- En cada estado se prueban primero las acciones no intentadas; cuando se agotan,
-  BFS sobre el grafo de transiciones conocido hasta el estado más cercano con acciones pendientes.
-- `ACTION6` (clic) apunta al centro de los objetos de color conectados, no a píxeles al azar.
-- Las transiciones que llevan a `GAME_OVER` se marcan y no se repiten.
-- Al completar un nivel se borra el grafo (nuevo mapa).
+**Exploration Strategy:** Treats each level as an unknown deterministic state machine.
+- State = Blake2b hash of the latest rendered grid.
+- Untried actions in the current state are prioritized first.
+- When current state actions are exhausted, BFS finds the shortest path to the nearest unexplored state.
+- ACTION6 (click) targets centroids of salient connected color objects rather than random pixels.
+- Self-loop actions (no-ops) and transitions leading to GAME_OVER are pruned and never retried.
+- Clears graph memory upon level completion for fresh topological mapping.
 
-**Modos:**
-- *Commit run*: juega 3 juegos públicos (`ls20`, `vc33`, `r11l`) en modo offline como prueba de humo y escribe una sumisión dummy.
-- *Rerun de sumisión* (`KAGGLE_IS_COMPETITION_RERUN`): juega los juegos privados a través del gateway de Kaggle.
-
-El código del agente se genera desde `src/graph_explorer_agent.py` con `tools/build_notebook.py`."""
+**Execution Modes:**
+- *Commit run*: plays 3 public games offline as a smoke test and writes a valid submission.parquet.
+- *Submission rerun* (`KAGGLE_IS_COMPETITION_RERUN`): interacts with the live evaluation gateway."""
 
 INSTALL = f"""!pip install --no-index --find-links {COMP}/arc_agi_3_wheels arc-agi python-dotenv"""
 

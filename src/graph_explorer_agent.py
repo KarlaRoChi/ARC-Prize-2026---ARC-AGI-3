@@ -117,6 +117,10 @@ class GraphExplorer(Agent):
         if frame.state is GameState.GAME_OVER:
             self.dead.add((self.prev_key, self.prev_action))
             return
+        if key == self.prev_key:
+            # Action resulted in no change (wall collision or ineffective click)
+            self.dead.add((self.prev_key, self.prev_action))
+            return
         self.edges.setdefault(self.prev_key, {})[self.prev_action] = key
 
     def _path_to_frontier(self, start: str) -> list[tuple]:
