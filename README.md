@@ -1,80 +1,84 @@
 # 🕹️ ARC Prize 2026 — ARC-AGI-3 (Interactive Reasoning)
 
-> **Competencia Kaggle:** [ARC Prize 2026 - ARC-AGI-3](https://www.kaggle.com/competitions/arc-prize-2026-arc-agi-3)  
-> **Recurso de Cómputo:** 💻 CPU (0 slots GPU) en v1. El pool de la competición incluye RTX 6000 (`g4-standard-48`) para agentes con LLM.  
-> **Internet:** ❌ Desactivado  
-> **Métrica:** completitud × eficiencia frente a humanos, 0–100 (ver [OVERVIEW.md](OVERVIEW.md))  
-> **Entregable:** lo genera Kaggle automáticamente durante el rerun; el notebook solo tiene que jugar.  
-> **Fechas clave:** 26-oct-2026 (aceptar reglas / merge de equipos) · **2-nov-2026 (sumisión final)**
+> **Kaggle Competition:** [ARC Prize 2026 - ARC-AGI-3](https://www.kaggle.com/competitions/arc-prize-2026-arc-agi-3)  
+> **Compute Resource:** 💻 CPU (0 GPU slots) in v1–v2. The competition pool also offers RTX 6000 (`g4-standard-48`) for LLM-based agents.  
+> **Internet:** ❌ Disabled  
+> **Metric:** Completion × efficiency relative to human baselines, 0–100 (see [OVERVIEW.md](OVERVIEW.md))  
+> **Best LB Score:** **`0.19`** (`v1_graph_explorer`, 100% prize-eligible)  
+> **Deliverable:** Generated automatically by the Kaggle evaluation gateway during the rerun.  
+> **Key Dates:** 2026-10-26 (entry / team merger deadline) · **2026-11-02 (final submission deadline)**
 
 ---
 
-## 🎯 Objetivo de la Competencia
+## 🎯 Competition Objective
 
-A diferencia de ARC-AGI-2 (predecir un grid a partir de ejemplos), aquí el agente **juega videojuegos desconocidos**:
-recibe frames (grid de hasta 64×64 con colores 0–15), elige acciones (`RESET`, `ACTION1`–`ACTION7`, donde `ACTION6` es un clic con coordenadas `x, y`) y tiene que descubrir por exploración qué hace cada acción, cuál es el objetivo y cómo superar cada nivel.
+Unlike ARC-AGI-2 (predicting a static grid from demonstration pairs), here the agent **plays unknown interactive video games**:
+it receives frames (a grid up to 64×64 with colors 0–15), chooses actions (`RESET`, `ACTION1`–`ACTION7`, where `ACTION6` is a coordinate click `x, y`), and must discover through exploration what each action does, what the goal is, and how to beat each level.
 
-La evaluación usa **110 juegos privados** que el agente nunca vio (55 para el LB público, 55 para el privado). Hay 25 juegos públicos en los datos para desarrollo local.
-
----
-
-## 🏗️ Enfoque Técnico (v1: Graph Explorer)
-
-[`src/graph_explorer_agent.py`](src/graph_explorer_agent.py) trata cada nivel como una máquina de estados determinista desconocida:
-
-1. **Estado** = hash del grid visible.
-2. **Acciones no probadas primero** en cada estado.
-3. **BFS sobre el grafo de transiciones** conocido hasta el estado más cercano con acciones pendientes.
-4. **Clics dirigidos:** `ACTION6` apunta al centro de cada objeto de color conectado.
-5. **Memoria de fracasos:** las transiciones que llevan a `GAME_OVER` se vetan.
-6. **Reinicio por nivel:** al completar un nivel se borra el grafo.
-
-Es un baseline sin LLM. Los equipos punteros (LB 60+) usan agentes LLM (Qwen3.x) en las RTX 6000 sobre un *harness* de exploración ("duck harness" de Tufa Labs, solución pública del Milestone 2).
+Evaluation runs on **110 private games** unseen by the agent (55 for the public LB, 55 for the private LB). Twenty-five public games are provided in the dataset for local development.
 
 ---
 
-## 📁 Estructura del Directorio
+## 🏗️ Technical Approach (v1–v2: Graph Explorer Agent)
+
+[`src/graph_explorer_agent.py`](src/graph_explorer_agent.py) models each level as an unknown deterministic finite-state machine:
+
+1. **State Representation:** Hash of the visible 2D grid.
+2. **Untried-Action Priority:** Untried actions at the current state are executed first.
+3. **Self-Loop & Dead-End Pruning (`v2`):** Transitions that result in `next_state == state` (wall collisions, no-op clicks) are pruned so the agent does not waste actions repeating ineffective moves.
+4. **Breadth-First Search (BFS) Frontier Navigation:** Navigates over known transitions to the nearest visited state that still has untried actions.
+5. **Object-Centric Clicks (`ACTION6`):** Targets centroids of connected color components in the current frame.
+6. **Failure Memory:** Transitions leading to `GAME_OVER` are blacklisted and avoided after reset.
+7. **Per-Level Graph Reset:** Clears the state transition graph whenever a level is completed.
+
+> [!NOTE]
+> **100% Prize-Eligible (CC BY 4.0):** This agent is written entirely from scratch with zero external weights or unverified dependencies.
+
+---
+
+## 📁 Directory Structure
 
 ```text
 ARC Prize 2026 - ARC-AGI-3/ARC Prize 2026 - ARC-AGI-3/
-├── kaggle_arc3_agent.ipynb      # Notebook de Kaggle (GENERADO desde src/, no editar a mano)
-├── kernel-metadata.json         # Metadatos del kernel remoto (CPU, sin internet)
+├── kaggle_arc3_agent.ipynb      # Kaggle notebook (GENERATED from src/, do not edit by hand)
+├── kernel-metadata.json         # Remote kernel metadata (CPU, offline)
 ├── src/
-│   └── graph_explorer_agent.py  # Código del agente (fuente única)
+│   └── graph_explorer_agent.py  # Single source of truth for the agent
 ├── tools/
-│   ├── build_notebook.py        # src/ → kaggle_arc3_agent.ipynb
-│   └── local_eval.py            # Juega los 25 juegos públicos offline y calcula el score oficial
-├── EXPERIMENT_LOG.md            # Registro de versiones y resultados
-├── OVERVIEW.md                  # Resumen del overview oficial
-├── DATASET_DESCRIPTION.md       # Resumen de datos, API de juegos y scoring
-├── data/                        # (ignorado) datos de la competición para pruebas locales
-└── submissions/                 # (ignorado) salidas descargadas del kernel
+│   ├── build_notebook.py        # Compiles src/ → kaggle_arc3_agent.ipynb
+│   └── local_eval.py            # Offline evaluation over the 25 public games
+├── EXPERIMENT_LOG.md            # Version history and CV/LB results
+├── OVERVIEW.md                  # Official competition overview summary
+├── DATASET_DESCRIPTION.md       # Game API, frame format, and scoring specification
+├── RULES.md                     # Prize eligibility & CC BY 4.0 rules
+├── data/                        # (git-ignored) local competition data
+└── submissions/                 # (git-ignored) downloaded kernel outputs
 ```
 
 ---
 
-## 🚀 Cómo Trabajar
+## 🚀 How to Run
 
 ```powershell
-# 1. Descargar los datos de la competición (una vez)
+# 1. Download competition data (once)
 python -m kaggle competitions download arc-prize-2026-arc-agi-3 -p data
 Expand-Archive data\arc-prize-2026-arc-agi-3.zip data
 
-# 2. Entorno local (Python >= 3.12) con el toolkit oficial
+# 2. Local environment (Python >= 3.12) with the official toolkit
 py -3.14 -m venv .venv
 .venv\Scripts\python -m pip install data\arc_agi_3_wheels\arc_agi-0.9.8-py3-none-any.whl data\arc_agi_3_wheels\arcengine-0.9.3-py3-none-any.whl python-dotenv pandas pyarrow
 
-# 3. Editar src/graph_explorer_agent.py y medir en los 25 juegos públicos
+# 3. Edit src/graph_explorer_agent.py and evaluate on the 25 public games
 .venv\Scripts\python tools\local_eval.py --data data
 .venv\Scripts\python tools\local_eval.py --data data --games ls20,vc33 --max-actions 1500
 
-# 4. Regenerar el notebook y lanzarlo en Kaggle (desde la raíz Kaggle/)
+# 4. Rebuild notebook and push to Kaggle (from workspace root Kaggle/)
 .venv\Scripts\python tools\build_notebook.py
 python kaggle_manager.py run arc3
 ```
 
-El *commit run* en Kaggle juega 3 juegos públicos (`ls20`, `vc33`, `r11l`) como prueba de humo e imprime `*** Smoke score`. Para puntuar en el LB hay que **enviar la versión del notebook** (code competition):
+The Kaggle *commit run* plays 3 public games (`ls20`, `vc33`, `r11l`) offline as a smoke test and prints `*** Smoke score`. To score on the leaderboard, **submit the notebook version** (code competition):
 
 ```powershell
-python -m kaggle competitions submit arc-prize-2026-arc-agi-3 -k rochikarla/arc-prize-2026-arc-agi-3-agent -v <versión> -f submission.parquet -m "v1 graph explorer"
+python -m kaggle competitions submit arc-prize-2026-arc-agi-3 -k rochikarla/arc-prize-2026-arc-agi-3-agent -v <version> -f submission.parquet -m "v2 graph explorer"
 ```
