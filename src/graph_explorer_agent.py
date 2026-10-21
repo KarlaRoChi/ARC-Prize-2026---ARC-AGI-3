@@ -1,15 +1,16 @@
-"""Graph-explorer agent for ARC-AGI-3 (v1 baseline, CPU only).
+"""Graph-explorer agent for ARC-AGI-3 (v3, CPU only).
 
-Treats each game level as an unknown deterministic state machine:
-- A state is the hash of the latest rendered grid.
-- For every state it remembers which actions were already tried and where they led.
-- It always prefers an untried action in the current state; when the current state is
-  exhausted it walks (BFS over the known transition graph) to the nearest state that
-  still has untried actions.
-- ACTION6 (click) candidates are the centres of the connected colour objects in the grid,
-  so clicks land on things instead of random pixels.
-- Transitions that end in GAME_OVER are marked as dead ends and never retried.
-- When a level is completed the graph is cleared, because the next level is a new map.
+Treats each game level as an unknown deterministic state machine with HUD-invariant state hashing:
+- Strips the 1-pixel outer HUD step-counter border (and 2px bottom HUD bar in games like ls20)
+  before computing the Blake2b state hash so step-counter ticks do not poison wall detection
+  or invalidate BFS plans (`self.plan`).
+- Detects full-screen flash penalty frames and soft-resets back to `start_key` from deep states,
+  preserving interrupted frontier actions instead of recording fake transitions to `start_key`.
+- Uses per-instance deterministic `random.Random(seed)` for thread-safe multi-game execution.
+- Extracts both foreground connected components and enclosed background cavities (<=64 px)
+  inside the playfield as `ACTION6` click targets.
+- Escapes exhausted leaf traps by clearing `self.dead` and refilling `self.untried[key]`
+  instead of repeating `(1,)` indefinitely.
 """
 
 from __future__ import annotations
@@ -24,7 +25,9 @@ from arcengine import FrameData, GameAction, GameState
 
 from agents.agent import Agent
 
-MAX_CLICK_TARGETS = 48  # ACTION6 candidates kept per state
+MAX_CLICK_TARGETS = 16  # ACTION6 candidates kept per state
+MIN_CLICK_DISTANCE = 4  # Spatial NMS radius in pixels
+OPPOSITE = {1: 2, 2: 1, 3: 4, 4: 3}
 
 
 def grid_of(frame: FrameData) -> np.ndarray | None:
@@ -34,51 +37,94 @@ def grid_of(frame: FrameData) -> np.ndarray | None:
     return np.asarray(frame.frame[-1], dtype=np.int16)
 
 
-def state_key(grid: np.ndarray | None) -> str:
+def playfield_of(grid: np.ndarray | None) -> np.ndarray | None:
+    """Strip 1px outer HUD border, plus 2px bottom HUD bar if present (e.g. ls20)."""
     if grid is None:
+        return None
+    h, w = grid.shape
+    if h >= 64 and w >= 64:
+        pf = grid[1:63, 1:63].copy()
+        if np.array_equal(grid[61, 13:63], grid[62, 13:63]):
+            pf[60:62, 12:] = 0
+        return pf
+    return grid
+
+
+def state_key(grid: np.ndarray | None) -> str:
+    pf = playfield_of(grid)
+    if pf is None:
         return "empty"
-    return hashlib.blake2b(grid.tobytes() + bytes(grid.shape), digest_size=12).hexdigest()
+    return hashlib.blake2b(pf.tobytes() + bytes(pf.shape), digest_size=12).hexdigest()
+
+
+def is_flash_frame(grid: np.ndarray | None) -> bool:
+    pf = playfield_of(grid)
+    if pf is None:
+        return True
+    return bool(np.all(pf == pf[0, 0]))
 
 
 def click_targets(grid: np.ndarray) -> list[tuple[int, int]]:
-    """Centres of connected same-colour regions, smallest (most salient) first."""
+    """Centres of connected same-colour regions inside the playfield, smallest first."""
     h, w = grid.shape
-    vals, counts = np.unique(grid, return_counts=True)
+    y_min, y_max = (1, min(h, 63)) if h >= 64 else (0, h)
+    x_min, x_max = (1, min(w, 63)) if w >= 64 else (0, w)
+    sub = grid[y_min:y_max, x_min:x_max]
+    vals, counts = np.unique(sub, return_counts=True)
     background = int(vals[np.argmax(counts)])
     seen = np.zeros_like(grid, dtype=bool)
-    objects: list[tuple[int, int, int]] = []  # (size, x, y)
-    for y in range(h):
-        for x in range(w):
-            if seen[y, x] or grid[y, x] == background:
+    fg_objects: list[tuple[int, int, int]] = []  # (size, x, y)
+    bg_objects: list[tuple[int, int, int]] = []
+
+    for y in range(y_min, y_max):
+        for x in range(x_min, x_max):
+            if seen[y, x]:
                 continue
             color = grid[y, x]
             stack = [(y, x)]
             seen[y, x] = True
             cells = []
+            touches_border = False
             while stack:
                 cy, cx = stack.pop()
                 cells.append((cy, cx))
+                if cy in (y_min, y_max - 1) or cx in (x_min, x_max - 1):
+                    touches_border = True
                 for ny, nx in ((cy + 1, cx), (cy - 1, cx), (cy, cx + 1), (cy, cx - 1)):
-                    if 0 <= ny < h and 0 <= nx < w and not seen[ny, nx] and grid[ny, nx] == color:
+                    if y_min <= ny < y_max and x_min <= nx < x_max and not seen[ny, nx] and grid[ny, nx] == color:
                         seen[ny, nx] = True
                         stack.append((ny, nx))
             # click the cell closest to the centroid so it is inside the object
             my = sum(c[0] for c in cells) / len(cells)
             mx = sum(c[1] for c in cells) / len(cells)
             cy, cx = min(cells, key=lambda c: (c[0] - my) ** 2 + (c[1] - mx) ** 2)
-            objects.append((len(cells), cx, cy))
-    objects.sort()
-    return [(x, y) for _, x, y in objects[:MAX_CLICK_TARGETS]]
+            if color != background:
+                fg_objects.append((len(cells), cx, cy))
+            elif not touches_border and len(cells) <= 64:
+                bg_objects.append((len(cells), cx, cy))
+
+    fg_objects.sort()
+    bg_objects.sort()
+    combined = fg_objects if len(fg_objects) >= 8 else (fg_objects + bg_objects)
+    
+    kept: list[tuple[int, int]] = []
+    for _, cx, cy in combined:
+        if all((cx - kx) ** 2 + (cy - ky) ** 2 >= MIN_CLICK_DISTANCE ** 2 for kx, ky in kept):
+            kept.append((cx, cy))
+        if len(kept) >= MAX_CLICK_TARGETS:
+            break
+    return kept
 
 
 class GraphExplorer(Agent):
-    """Systematic explorer: untried actions first, BFS to the nearest unexplored state."""
+    """Systematic HUD-invariant explorer: untried actions first, BFS to nearest frontier state."""
 
     MAX_ACTIONS = 4000  # per game; efficiency is scored per level, so cap the flailing
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        random.seed(hash(self.game_id) & 0xFFFFFFFF)
+        seed = int.from_bytes(hashlib.blake2b(str(self.game_id).encode(), digest_size=4).digest(), "little")
+        self.rng = random.Random(seed)
         self._reset_memory()
         self.prev_key: str | None = None
         self.prev_action: tuple | None = None
@@ -89,26 +135,39 @@ class GraphExplorer(Agent):
         self.untried: dict[str, list[tuple]] = {}
         self.edges: dict[str, dict[tuple, str]] = {}
         self.dead: set[tuple[str, tuple]] = set()
+        self.start_key: str | None = None
+        self.depth: dict[str, int] = {}
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
 
     # -- bookkeeping -------------------------------------------------------
     def _actions_for(self, frame: FrameData, grid: np.ndarray | None) -> list[tuple]:
-        available = frame.available_actions or [1, 2, 3, 4, 5, 6, 7]
+        available = [int(a) for a in (frame.available_actions or [1, 2, 3, 4, 5, 6, 7]) if int(a) != 0]
         acts: list[tuple] = []
         for a in available:
-            a = int(a)
-            if a == 0:
-                continue
             if a == 6:
                 if grid is not None:
                     acts.extend((6, x, y) for x, y in click_targets(grid))
             else:
                 acts.append((a,))
-        random.shuffle(acts)
-        # simple actions before clicks: they are few and usually move the player
-        acts.sort(key=lambda t: t[0] == 6)
+        self.rng.shuffle(acts)
+        # Apply directional momentum: maintain current heading down corridors and deprioritize immediate reversals
+        if self.prev_action and len(self.prev_action) == 1:
+            prev_a = self.prev_action[0]
+            opp = OPPOSITE.get(prev_a)
+            def sort_key(t: tuple) -> int:
+                if t[0] == 6:
+                    return 10  # clicks after navigation
+                if t[0] == prev_a:
+                    return 0   # continue straight along corridor
+                if t[0] == opp:
+                    return 5   # backtracking is lowest directional priority
+                return 1       # lateral turns
+            acts.sort(key=sort_key)
+        else:
+            # simple actions before clicks: they are few and usually move the player
+            acts.sort(key=lambda t: t[0] == 6)
         return acts
 
     def _record_transition(self, key: str, frame: FrameData) -> None:
@@ -118,10 +177,20 @@ class GraphExplorer(Agent):
             self.dead.add((self.prev_key, self.prev_action))
             return
         if key == self.prev_key:
-            # Action resulted in no change (wall collision or ineffective click)
-            self.dead.add((self.prev_key, self.prev_action))
+            # Record self-loop edge for BFS so it knows this action does not change the state,
+            # but do NOT add to self.dead so we don't break multi-step triggers or stateful buttons.
+            self.edges.setdefault(self.prev_key, {})[self.prev_action] = key
+            return
+        # Detect soft-reset to start_key from deep state (step timeout / life lost)
+        if key == self.start_key and self.depth.get(self.prev_key, 0) > 2:
+            if self.prev_key in self.untried and self.prev_action not in self.untried[self.prev_key]:
+                self.untried[self.prev_key].insert(0, self.prev_action)
             return
         self.edges.setdefault(self.prev_key, {})[self.prev_action] = key
+        if key not in self.depth:
+            self.depth[key] = self.depth.get(self.prev_key, 0) + 1
+        else:
+            self.depth[key] = min(self.depth[key], self.depth.get(self.prev_key, 0) + 1)
 
     def _path_to_frontier(self, start: str) -> list[tuple]:
         """Shortest known action sequence from start to a state with untried actions."""
@@ -158,7 +227,21 @@ class GraphExplorer(Agent):
             self.prev_key, self.prev_action, self.plan = None, None, []
 
         grid = grid_of(latest_frame)
+        # Skip uniform flash/penalty frames so they do not pollute the transition graph
+        if is_flash_frame(grid) and self.start_key is not None:
+            if self.prev_key in self.untried and self.prev_action is not None:
+                if self.prev_action not in self.untried[self.prev_key]:
+                    self.untried[self.prev_key].insert(0, self.prev_action)
+            self.prev_key, self.prev_action, self.plan = None, None, []
+            avail = [int(a) for a in (latest_frame.available_actions or [1]) if int(a) != 0]
+            act = (avail[0],) if avail and avail[0] != 6 else (6, 32, 32)
+            return self._to_game_action(act)
+
         key = state_key(grid)
+        if self.start_key is None:
+            self.start_key = key
+            self.depth[key] = 0
+
         expected = self.edges.get(self.prev_key or "", {}).get(self.prev_action)
         self._record_transition(key, latest_frame)
         if key not in self.untried:
@@ -168,10 +251,8 @@ class GraphExplorer(Agent):
         if self.plan and expected is not None and expected != key:
             self.plan = []
 
-        options = [a for a in self.untried[key] if (key, a) not in self.dead]
-        if not self.plan and options:
-            action = options[0]
-            self.untried[key].remove(action)
+        if not self.plan and self.untried[key]:
+            action = self.untried[key].pop(0)
         else:
             if not self.plan:
                 self.plan = self._path_to_frontier(key)
@@ -179,7 +260,13 @@ class GraphExplorer(Agent):
                 action = self.plan.pop(0)
             else:
                 known = [a for a in self.edges.get(key, {}) if (key, a) not in self.dead]
-                action = random.choice(known) if known else (1,)
+                if known:
+                    action = self.rng.choice(known)
+                else:
+                    # Leaf-trap recovery: clear dead set and refill current state's untried queue
+                    self.dead.clear()
+                    self.untried[key] = self._actions_for(latest_frame, grid)
+                    action = self.untried[key].pop(0) if self.untried[key] else (1,)
 
         self.prev_key, self.prev_action = key, action
         return self._to_game_action(action)

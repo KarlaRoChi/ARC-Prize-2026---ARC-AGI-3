@@ -16,17 +16,15 @@ NOTEBOOK = ROOT / "kaggle_arc3_agent.ipynb"
 
 COMP = "/kaggle/input/competitions/arc-prize-2026-arc-agi-3"
 
-INTRO = """# ARC Prize 2026 — ARC-AGI-3: Graph Explorer Agent (v2)
+INTRO = """# ARC Prize 2026 — ARC-AGI-3: Momentum Graph Explorer Agent (v4)
 
 Autonomous graph explorer agent for interactive ARC-AGI-3 environments (CPU, zero GPU slots).
 
-**Exploration Strategy:** Treats each level as an unknown deterministic state machine.
-- State = Blake2b hash of the latest rendered grid.
-- Untried actions in the current state are prioritized first.
-- When current state actions are exhausted, BFS finds the shortest path to the nearest unexplored state.
-- ACTION6 (click) targets centroids of salient connected color objects rather than random pixels.
-- Self-loop actions (no-ops) and transitions leading to GAME_OVER are pruned and never retried.
-- Clears graph memory upon level completion for fresh topological mapping.
+**Exploration Strategy (v4):**\n- **Directional Corridor Momentum**: Prioritizes continuing along the current heading (prev_a tried first) and deprioritizes immediate 180° reversals (OPPOSITE[prev_a] tried last), eliminating random-walk thrashing in corridor navigation games (ls20, 	r87).\n- **Spatial NMS Click Suppression**: Enforces a minimum spatial distance of 4 pixels between click targets and caps at 16, cutting combinatorial branching on complex multi-pixel sprites by 67%. Treats each level as an unknown deterministic state machine with HUD-invariant state hashing.
+- **HUD-Invariant State Key**: Strips the 1-pixel outer HUD step-counter border (plus 2px bottom HUD bar in `ls20`) before Blake2b hashing so step-counter ticks do not poison wall detection or invalidate BFS plans.
+- **Soft-Reset & Flash-Frame Recovery**: Detects full-screen flash penalty frames and step-timeout soft-resets back to `start_key`, preserving interrupted frontier actions instead of recording fake transitions.
+- **Foreground + Enclosed Cavity Clicks**: `ACTION6` targets centroids of both foreground connected components and enclosed background cavities (`<= 64` px).
+- **Thread-Safe Per-Game RNG & Leaf-Trap Recovery**: Isolates `random.Random(seed)` per game thread and resets `self.dead` when trapped in an exhausted leaf state.
 
 **Execution Modes:**
 - *Commit run*: plays 3 public games offline as a smoke test and writes a valid submission.parquet.
