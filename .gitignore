@@ -9,6 +9,8 @@ submissions/
 *.parquet
 *.jsonl
 *.log
+ablation*.json
+momentum_tuning_results.json
 
 # Competition data (download with `kaggle competitions download arc-prize-2026-arc-agi-3`)
 data/
