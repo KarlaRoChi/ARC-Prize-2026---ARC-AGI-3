@@ -4,7 +4,7 @@
 > **Compute Resource:** 💻 CPU (0 GPU slots) in v1–v2. The competition pool also offers RTX 6000 (`g4-standard-48`) for LLM-based agents.  
 > **Internet:** ❌ Disabled  
 > **Metric:** Completion × efficiency relative to human baselines, 0–100 (see [OVERVIEW.md](OVERVIEW.md))  
-> **Best LB Score:** **`0.19`** (`v1_graph_explorer`, 100% prize-eligible)  
+> **Best LB Score:** **`0.23`** (`v3_hud_invariant_soft_self_loop`, own agent, 100% prize-eligible)  
 > **Final Leaderboard Rank:** 🏅 **2214 / 4923** teams (top 45%)  
 > **Deliverable:** Generated automatically by the Kaggle evaluation gateway during the rerun.  
 > **Key Dates:** 2026-10-26 (entry / team merger deadline) · **2026-11-02 (final submission deadline)**
@@ -20,34 +20,52 @@ Evaluation runs on **110 private games** unseen by the agent (55 for the public 
 
 ---
 
-## 🏗️ Technical Approach (v1–v2: Graph Explorer Agent)
+## 🏗️ Technical Approach: Graph Explorer Agent (written from scratch)
 
 [`src/graph_explorer_agent.py`](src/graph_explorer_agent.py) models each level as an unknown deterministic finite-state machine:
 
 1. **State Representation:** Hash of the visible 2D grid.
 2. **Untried-Action Priority:** Untried actions at the current state are executed first.
-3. **Self-Loop & Dead-End Pruning (`v2`):** Transitions that result in `next_state == state` (wall collisions, no-op clicks) are pruned so the agent does not waste actions repeating ineffective moves.
-4. **Breadth-First Search (BFS) Frontier Navigation:** Navigates over known transitions to the nearest visited state that still has untried actions.
-5. **Object-Centric Clicks (`ACTION6`):** Targets centroids of connected color components in the current frame.
-6. **Failure Memory:** Transitions leading to `GAME_OVER` are blacklisted and avoided after reset.
-7. **Per-Level Graph Reset:** Clears the state transition graph whenever a level is completed.
+3. **HUD-Invariant State Hashing (`v3`):** The outer HUD border and bottom bar are stripped before hashing, so step counters do not create false new states.
+4. **Soft Self-Loop Recording (`v3`):** Transitions where `next_state == state` are recorded instead of hard-pruned (hard pruning in `v2` dropped the LB to 0.03 because it blacklisted stateful buttons).
+5. **Breadth-First Search (BFS) Frontier Navigation:** Navigates over known transitions to the nearest visited state that still has untried actions.
+6. **Object-Centric Clicks (`ACTION6`):** Targets centroids of connected color components and enclosed background cavities.
+7. **Failure Memory:** Transitions leading to `GAME_OVER` are blacklisted and avoided after reset.
+8. **Per-Level Graph Reset:** Clears the state transition graph whenever a level is completed.
 
 > [!NOTE]
 > **100% Prize-Eligible (CC BY 4.0):** This agent is written entirely from scratch with zero external weights or unverified dependencies.
+
+### 📈 Results and ablation
+
+| Version | Change | LB |
+|---|---|:---:|
+| `v1` | Graph explorer baseline | 0.19 |
+| `v2` | Hard self-loop pruning | 0.03 |
+| `v3` | HUD-invariant hashing + soft self-loops | **0.23** |
+
+A later 25-game offline ablation (`tools/ablation_study.py`) showed that **directional momentum** nearly doubles the local score (0.19 → 0.37) while spatial click NMS hurts it, and a γ × ρ sweep (`tools/tune_momentum.py`) showed that a reversal penalty ρ ≥ 0.1 is needed to stop corridor ping-ponging. See [EXPERIMENT_LOG.md](EXPERIMENT_LOG.md) for details.
+
+### LLM agent baseline (not my work)
+
+[`kernel_duck_m2/`](kernel_duck_m2/) packages the open-sourced Milestone 2 winning agent by Daniel Franzen ([da-fr/arc-agi-3-solution](https://github.com/da-fr/arc-agi-3-solution), Apache 2.0, built on [Tufalabs/duck-harness](https://github.com/Tufalabs/duck-harness)) to compare against my heuristic agent. My contribution there is only the build script (`tools/build_duck_m2.py`) and the reduced commit-run settings.
 
 ---
 
 ## 📁 Directory Structure
 
 ```text
-ARC Prize 2026 - ARC-AGI-3/ARC Prize 2026 - ARC-AGI-3/
+./
 ├── kaggle_arc3_agent.ipynb      # Kaggle notebook (GENERATED from src/, do not edit by hand)
 ├── kernel-metadata.json         # Remote kernel metadata (CPU, offline)
 ├── src/
 │   └── graph_explorer_agent.py  # Single source of truth for the agent
 ├── tools/
 │   ├── build_notebook.py        # Compiles src/ → kaggle_arc3_agent.ipynb
-│   └── local_eval.py            # Offline evaluation over the 25 public games
+│   ├── local_eval.py            # Offline evaluation over the 25 public games
+│   ├── ablation_study.py        # 25-game ablation (momentum vs NMS)
+│   └── tune_momentum.py         # γ × ρ parameter sweep
+├── kernel_duck_m2/              # Packaged third-party LLM agent (see above)
 ├── EXPERIMENT_LOG.md            # Version history and CV/LB results
 ├── OVERVIEW.md                  # Official competition overview summary
 ├── DATASET_DESCRIPTION.md       # Game API, frame format, and scoring specification
@@ -73,9 +91,9 @@ py -3.14 -m venv .venv
 .venv\Scripts\python tools\local_eval.py --data data
 .venv\Scripts\python tools\local_eval.py --data data --games ls20,vc33 --max-actions 1500
 
-# 4. Rebuild notebook and push to Kaggle (from workspace root Kaggle/)
+# 4. Rebuild the notebook and push it to Kaggle (requires the Kaggle CLI)
 .venv\Scripts\python tools\build_notebook.py
-python kaggle_manager.py run arc3
+kaggle kernels push -p .
 ```
 
 The Kaggle *commit run* plays 3 public games (`ls20`, `vc33`, `r11l`) offline as a smoke test and prints `*** Smoke score`. To score on the leaderboard, **submit the notebook version** (code competition):
