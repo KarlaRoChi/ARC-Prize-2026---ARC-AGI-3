@@ -5,6 +5,7 @@
 > **Internet:** ❌ Disabled  
 > **Metric:** Completion × efficiency relative to human baselines, 0–100 (see [OVERVIEW.md](OVERVIEW.md))  
 > **Best LB Score:** **`0.19`** (`v1_graph_explorer`, 100% prize-eligible)  
+> **Final Leaderboard Rank:** 🏅 **2214 / 4923** teams (top 45%)  
 > **Deliverable:** Generated automatically by the Kaggle evaluation gateway during the rerun.  
 > **Key Dates:** 2026-10-26 (entry / team merger deadline) · **2026-11-02 (final submission deadline)**
 
